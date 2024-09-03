@@ -11,15 +11,10 @@
  *                                                                         *
  ***************************************************************************/
 
-
 void modeLSDJMasterSyncSetup()
 {
   digitalWrite(pinStatusLed,LOW);
   pinMode(pinGBClock,INPUT);
-
-  #ifdef USE_TEENSY
-  usbMIDI.setHandleRealTimeSystem(NULL);
-  #endif
 
   countSyncTime=0;
   blinkMaxCount=1000;
@@ -28,33 +23,32 @@ void modeLSDJMasterSyncSetup()
 
 void modeLSDJMasterSync()
 {
-  while(1){
+  while (1) {
+    // continue to read from MIDI so that the programmer handler is called
+    #ifdef HAS_USB_MIDI
+    while (uMIDI.read()) ;
+    #endif
+    sMIDI.read();
 
-#ifdef USE_TEENSY
-    while(usbMIDI.read()) ;
-#endif
-
-    if (serial->available()) {                  //If serial data was send to midi input
-      incomingMidiByte = serial->read();            //Read it
-      if(!checkForProgrammerSysex(incomingMidiByte) && !usbMode) serial->write(incomingMidiByte);        //Send it to the midi output
-    }
-    readgbClockLine = digitalRead(pinGBClock);    //Read gameboy's clock line
-    if(readgbClockLine) {                         //If Gb's Clock is On
-      while(readgbClockLine) {                    //Loop untill its off
-        readgbClockLine = digitalRead(pinGBClock);//Read the clock again
-        bit = digitalRead(pinGBSerialIn);         //Read the serial input for song position
-        checkActions();
-      }
-
-      countClockPause= 0;                          //Reset our wait timer for detecting a sequencer stop
-
-      readGbSerialIn = readGbSerialIn << 1;        //left shift the serial byte by one to append new bit from last loop
-      readGbSerialIn = readGbSerialIn + bit;       //and then add the bit that was read
-
-      sendMidiClockSlaveFromLSDJ();                //send the clock & start offset data to midi
-
-    }
+    readGbClock();
+    sendMidiClockSlaveFromLSDJ();                //send the clock & start offset data to midi
     setMode();
+  }
+}
+
+void readGbClock() {
+  readgbClockLine = digitalRead(pinGBClock);    //Read gameboy's clock line
+  if(readgbClockLine) {                         //If Gb's Clock is On
+    while(readgbClockLine) {                    //Loop untill its off
+      readgbClockLine = digitalRead(pinGBClock);//Read the clock again
+      bit = digitalRead(pinGBSerialIn);         //Read the serial input for song position
+      checkActions();
+    }
+
+    countClockPause= 0;                          //Reset our wait timer for detecting a sequencer stop
+
+    readGbSerialIn = readGbSerialIn << 1;        //left shift the serial byte by one to append new bit from last loop
+    readGbSerialIn = readGbSerialIn + bit;       //and then add the bit that was read
   }
 }
 
@@ -76,21 +70,19 @@ boolean checkLSDJStopped()
     if(sequencerStarted) {
       readgbClockLine=false;
       countClockPause = 0;                      //reset our clock
-      serial->write(0xFC);                      //send the transport stop message
-#ifdef USE_TEENSY
-      usbMIDI.sendRealTime(0xFC);
-#endif
-#ifdef USE_LEONARDO
-      midiEventPacket_t event = {0x0F, 0xFC};
-      MidiUSB.sendMIDI(event);
-      MidiUSB.flush();
-#endif
+      sMIDI.sendRealTime(midi::Stop);
+      #ifdef HAS_USB_MIDI
+        uMIDI.sendRealTime(midi::Stop);
+      #endif
+
       sequencerStop();                          //call the global sequencer stop function
     }
     return true;
   }
   return false;
 }
+
+#define VELOCITY_MAX 127
 
  /*
   sendMidiClockSlaveFromLSDJ waits for 8 clock bits from LSDJ,
@@ -102,35 +94,22 @@ void sendMidiClockSlaveFromLSDJ()
 {
   if(!countGbClockTicks) {      //If we hit 8 bits
     if(!sequencerStarted) {         //If the sequencer hasnt started
-      serial->write((0x90+memory[MEM_LSDJMASTER_MIDI_CH])); //Send the midi channel byte
-      serial->write(readGbSerialIn);                //Send the row value as a note
-      serial->write(0x7F);                          //Send a velocity 127
-      serial->write(0xFA);     //send MIDI transport start message
+      //Send the row value as a note
+      sMIDI.sendNoteOn(readGbSerialIn, VELOCITY_MAX, memory[MEM_LSDJMASTER_MIDI_CH]+1);
+      sMIDI.sendRealTime(midi::Start);
 
-#ifdef USE_TEENSY
-      usbMIDI.sendNoteOn(memory[MEM_LSDJMASTER_MIDI_CH]+1,readGbSerialIn,0x7F);
-      usbMIDI.sendRealTime(0xFA);
-#endif
-#ifdef USE_LEONARDO
-      midiEventPacket_t event = {0x09, 0x90 | memory[MEM_LSDJMASTER_MIDI_CH] + 1, readGbSerialIn, 0x7F};
-      MidiUSB.sendMIDI(event);
-      MidiUSB.flush();
-      event = {0x0F, 0xFA};
-      MidiUSB.sendMIDI(event);
-      MidiUSB.flush();
-#endif
+      #ifdef HAS_USB_MIDI
+        uMIDI.sendNoteOn(readGbSerialIn, VELOCITY_MAX, memory[MEM_LSDJMASTER_MIDI_CH]+1);
+        uMIDI.sendRealTime(midi::Start);
+      #endif
+
       sequencerStart();             //call the global sequencer start function
     }
-    serial->write(0xF8);       //Send the MIDI Clock Tick
+    sMIDI.sendRealTime(midi::Clock);
+    #ifdef HAS_USB_MIDI
+      uMIDI.sendRealTime(midi::Clock);
+    #endif
 
-#ifdef USE_TEENSY
-    usbMIDI.sendRealTime(0xF8);
-#endif
-#ifdef USE_LEONARDO
-    midiEventPacket_t event = {0x0F, 0xF8};
-    MidiUSB.sendMIDI(event);
-    MidiUSB.flush();
-#endif
     countGbClockTicks=0;            //Reset the bit counter
     readGbSerialIn = 0x00;                //Reset our serial read value
 
