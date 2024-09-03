@@ -105,6 +105,8 @@
 #define MEM_MIDIOUT_BIT_DELAY 61
 #define MEM_MIDIOUT_BYTE_DELAY 63
 
+// #define PRO_MICRO // define this for Pro Micro custom Arduino (not detectable from regular defines)
+
 /***************************************************************************
 * User Settings
 ***************************************************************************/
@@ -140,6 +142,8 @@ byte defaultMemoryMap[MEM_MAX] = {
 };
 byte memory[MEM_MAX];
 
+#include <MIDI.h>
+
 /***************************************************************************
 * Lets Assign our Arduino Pins .....
 ***************************************************************************/
@@ -155,7 +159,6 @@ byte memory[MEM_MAX];
 #if defined (__MK20DX256__) || defined (__MK20DX128__) || defined (__MKL26Z64__)
 #define USE_TEENSY 1
 #define USE_USB 1
-#include <MIDI.h>
 
 #if defined (__MKL26Z64__)
 #define GB_SET(bit_cl,bit_out,bit_in) GPIOB_PDOR = ((bit_in<<3) | (bit_out<<1) | bit_cl)
@@ -172,6 +175,29 @@ int pinLeds[] = {23,22,21,20,4,13}; // LED Pins
 int pinButtonMode = 2; //toggle button for selecting the mode
 
 HardwareSerial *serial = &Serial1;
+
+/***************************************************************************
+* Pro Micro (ATmega32U4, with different pin config)
+***************************************************************************/
+#elif defined (PRO_MICRO)
+#define USE_LEONARDO
+#include <MIDIUSB.h>
+
+#define GB_SET(bit_cl, bit_out, bit_in) PORTF = (PINF & B00011111) | ((bit_cl<<7) | ((bit_out)<<6) | ((bit_in)<<5))
+// ^ The reason for not using digitalWrite is to allign clock and data pins for the GB shift reg.
+// Pin distribution comes from official Arduino Leonardo documentation
+
+int pinGBClock     = A0;    // Analog In 0 - clock out to gameboy
+int pinGBSerialOut = A1;    // Analog In 1 - serial data to gameboy 
+int pinGBSerialIn  = A2;    // Analog In 2 - serial data from gameboy
+int pinMidiInputPower = 4; // power pin for midi input opto-isolator
+int pinStatusLed = 10; // Status LED
+int pinLeds[] = {9,8,7,6,5,10}; // LED Pins
+int pinButtonMode = 3; //toggle button for selecting the mode
+
+HardwareSerial *serial = &Serial1;
+
+
 
 /***************************************************************************
 * Arduino Leonardo/Yún/Micro (ATmega32U4)
