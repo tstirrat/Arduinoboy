@@ -1,10 +1,25 @@
-# Arduinoboy
-Official ArduinoBoy Repository for serial MIDI communication to the Nintendo Gameboy.
+# Arduinoboy (ts mod*)
+~~Official~~ ArduinoBoy Repository for serial MIDI communication to the Nintendo Gameboy.
 
 ![ScreenShot](http://trash80.net/arduinoboy/aboy1_2_0.jpg)
 
 ## About 
 Arduinoboy is software for the [Arduino hardware platform](http://arduino.cc) that allows serial communication (MIDI) to the Nintendo Gameboy for music applications such as [LittleSoundDJ](http://littlesounddj.com), [Nanoloop.](http://www.nanoloop.com/), and [mGB](https://github.com/trash80/mGB)
+
+## \*Changes from the trash80/master
+
+**2024-10-15 - `v1.4-ts`:**
+
+- Uses a new web based editor/config tool: https://arduinoboy-editor.web.app/
+  - The editor tool works over USB and serial midi (previously only worked over serial MIDI)
+  - Slight changes to the editor SysEx messages:
+    - There is a new `SETTINGS_GET == 76` request that sends the settings back
+    - The `sendMode()` response was missing a message type, it is now `MSG_MODE == 0x41`
+- Passes more MIDI messages through in mode 5 (MIDI/mGB mode) - e.g. SysEx, Realtime Start/Stop/Clock/Song position
+  - This makes it more general purpose, for use with other MIDI based carts like [Chord](http://www.humbletune.com/chord/)
+- Added a `PRO_MICRO` definition in Arduinoboy.ino, Pro Micros have a different pin out than regular Micro
+- General code cleanup so that all modes operate consistently in serial and usb midi
+  - Fixed some output channels being misread or not adhered to in USB midi mode (e.g. master sync)
 
 
 ## Current Features
@@ -13,7 +28,7 @@ Arduinoboy is software for the [Arduino hardware platform](http://arduino.cc) th
 * Push Button selector sets the sync/state modes [(7 modes available)](#modes-details)
 * [mGB](https://github.com/trash80/mGB)
  Mode: Full MIDI in support across all Gameboy Channels, including a unique "poly" mode allows you to play your Game Boy like a synthesizer. 
-* Midi Out Doubles as a Midi Thru
+* Midi Out Doubles as a Midi Thru (serial midi to midi out only)
 * "Filtering" data for only sync messages, no dedicated MIDI line required.
 * Can be powered by the Game Boy's gamelink port.
 * USB upgradeable via Arduino.

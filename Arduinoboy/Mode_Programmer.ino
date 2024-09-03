@@ -1,14 +1,45 @@
+#define MSG_CONNECT 72
+#define MSG_HEARTBEAT 0x7F
+#define MSG_CONNECT_REQ 64
+#define MSG_CONNECT_REQ_ACK 65
+#define MSG_CONNECTED 66
+
+#define MSG_SETTINGS 0x40
+#define MSG_MODE 0x41
+
+#define MSG_SETTNGS_SET 70
+#define MSG_SETTINGS_RESET 71
+#define MSG_SETTNGS_GET 76
+#define MSG_MODE_GET 73
+#define MSG_MODE_SET 74
+#define MSG_MIDI_OUT_DELAY_SET 75
+
 void modeProgrammer()
-{
+{ 
   while(sysexProgrammingConnected || sysexProgrammingMode) {
     checkProgrammerConnected();
-    if (serial->available()) checkForProgrammerSysex(serial->read());
+
+    modeProgrammerSerialMidiReceive();
+    modeProgrammerUsbMidiReceive();
+    
     updateProgrammerLeds();
     setMode();
-    usbMidiUpdate();
   }
   showSelectedMode();
   switchMode();
+}
+
+void modeProgrammerSerialMidiReceive() {
+  // while in programmer mode, we still need to read the MIDI, but the
+  // programmer handles all of the messages in systemExclusiveHandler
+  if (!sMIDI.read()) { return; }
+}
+
+void modeProgrammerUsbMidiReceive() {
+  #ifdef HAS_USB_MIDI
+    // same here, read the midi data, messages handled in systemExclusiveHandler
+    while (uMIDI.read()) ;
+  #endif
 }
 
 void setProgrammerConnected()
@@ -22,72 +53,70 @@ void setProgrammerConnected()
 
 void checkProgrammerConnected()
 {
-  programmerSendConnectRequest();
+  programmerSendHeartbeat();
   programmerCheckTimeout();
 }
 
 void programmerSendSettings()
 {
-  sysexData[0] = 0xF0;
-  sysexData[1] = sysexManufacturerId;
-  sysexData[2] = 0x40;
-  memcpy(&sysexData[3], memory, MEM_MAX+1);
-  sysexData[MEM_MAX+3] = 0xF7;
-  serial->write(sysexData, MEM_MAX+4);
-#ifdef USE_TEENSY
-  usbMIDI.sendSysEx(MEM_MAX+4, sysexData);
-#endif
+  sysexData[0] = midi::SystemExclusive;
+  sysexData[1] = SYSEX_MFG_ID;
+  sysexData[2] = MSG_SETTINGS;
+  memcpy(&sysexData[3], memory, MEM_MAX);
+  sysexData[MEM_MAX + 3] = midi::SystemExclusiveEnd;
+  
+  sMIDI.sendSysEx(MEM_MAX + 4, sysexData, true /* includes headers */);
+  #ifdef HAS_USB_MIDI
+    uMIDI.sendSysEx(MEM_MAX + 4, sysexData, true /* includes headers */);
+  #endif
 }
 
 void setProgrammerRequestConnect()
 {
-  uint8_t data[4] = {0xF0,sysexManufacturerId,65,0xF7};
-  serial->write(data, 4);
-#ifdef USE_TEENSY
-  usbMIDI.sendSysEx(4, data);
-#endif
+  // Serial.println("<< MSG_CONNECT_REQ_ACK");
+  uint8_t data[] = {midi::SystemExclusive,SYSEX_MFG_ID,MSG_CONNECT_REQ_ACK,midi::SystemExclusiveEnd};
+  sMIDI.sendSysEx(sizeof(data), data, true /* includes headers */);
+  #ifdef HAS_USB_MIDI
+    uMIDI.sendSysEx(sizeof(data), data, true /* includes headers */);
+  #endif
 }
 
-void setProgrammerMemorySave()
+void saveSettings()
 {
-  byte offset = 2;
-  for(byte m=4;m < MEM_MAX;m++) {
-    memory[m] = sysexData[offset];
-    offset++;
+  byte sysexOffset = 2;
+  for(byte m = MEM_FORCE_MODE; m < MEM_MAX; m++) {
+    memory[m] = sysexData[sysexOffset];
+    sysexOffset++;
   }
   saveMemory();
   loadMemory();
   programmerSendSettings();
 }
 
-void setProgrammerRestoreMemory()
+void resetSettings()
 {
-  initMemory(1);
+  initMemory(true /* reinit */);
   programmerSendSettings();
 }
 
 void programmerCheckTimeout()
 {
-  if(sysexProgrammingConnected && millis() > (sysexProgrammerLastResponse+sysexProgrammerWaitTime)) {
-    //programmer timeout!
-    sysexProgrammingConnected = 0;
-    sysexProgrammingMode      = 0;
-  }
-  if(sysexProgrammingMode && millis() > (sysexProgrammerLastResponse+sysexProgrammerWaitTime)) {
+  if((sysexProgrammingMode || sysexProgrammingConnected) && millis() > (sysexProgrammerLastResponse + PROGRAMMER_MAX_WAIT_TIME)) {
     //programmer timeout!
     sysexProgrammingConnected = 0;
     sysexProgrammingMode      = 0;
   }
 }
 
-void programmerSendConnectRequest()
+void programmerSendHeartbeat()
 {
-  if(millis() > (sysexProgrammerLastSent+sysexProgrammerCallTime)) {
-    uint8_t data[6] = {0xF0, sysexManufacturerId, 0x7F, defaultMemoryMap[MEM_VERSION_FIRST], defaultMemoryMap[MEM_VERSION_SECOND], 0xF7};
-    serial->write(data, 6);
-#ifdef USE_TEENSY
-    usbMIDI.sendSysEx(6, data);
-#endif
+  if(millis() > (sysexProgrammerLastSent + PROGRAMMER_MAX_CALL_TIME)) {
+    // Serial.println("<< MSG_HEARTBEAT");
+    uint8_t data[] = {midi::SystemExclusive, SYSEX_MFG_ID, MSG_HEARTBEAT, defaultMemoryMap[MEM_VERSION_FIRST], defaultMemoryMap[MEM_VERSION_SECOND], midi::SystemExclusiveEnd};
+    sMIDI.sendSysEx(sizeof(data), data, true /* includes headers */);
+    #ifdef HAS_USB_MIDI
+      uMIDI.sendSysEx(sizeof(data), data, true /* includes headers */);
+    #endif
     sysexProgrammerLastSent = millis();
   }
 }
@@ -129,11 +158,11 @@ void setMode(byte mode)
 
 void sendMode()
 {
-  uint8_t data[4] = {0xF0, sysexManufacturerId, memory[MEM_MODE], 0xF7};
-  serial->write(data, 4);
-#ifdef USE_TEENSY
-  usbMIDI.sendSysEx(4, data);
-#endif
+  uint8_t data[] = {midi::SystemExclusive, SYSEX_MFG_ID, MSG_MODE, memory[MEM_MODE], midi::SystemExclusiveEnd};
+  sMIDI.sendSysEx(sizeof(data), data, true /* includes headers */);
+  #ifdef HAS_USB_MIDI
+    uMIDI.sendSysEx(sizeof(data), data, true /* includes headers */);
+  #endif
 }
 
 void setMidioutDelay(byte a,byte b,byte c,byte d)
@@ -146,52 +175,57 @@ void setMidioutDelay(byte a,byte b,byte c,byte d)
   changeTasks();
 }
 
-void getSysexData()
+/** Handle programmer messages in the sysexData payload */
+void handleProgrammerMessage()
 {
-  if(sysexData[0] == 0x69 && checkSysexChecksum()) {
+  if(sysexData[0] == SYSEX_MFG_ID && checkSysexChecksum()) {
+    const byte message = sysexData[1];
+
     //sysex good, do stuff
     sysexPosition = 0;
     if(sysexProgrammingMode) {
-      if(sysexData[1] == 64
-      && sysexData[2] == defaultMemoryMap[MEM_VERSION_FIRST]
-      && sysexData[3] == defaultMemoryMap[MEM_VERSION_SECOND]) {
-        //serial connected to programmer
+      if(message == MSG_CONNECT_REQ && versionsMatch()) {
+        // Serial.println(">> MSG_CONNECT_REQ");
         setProgrammerRequestConnect();
       }
-      if(sysexData[1] == 66
-      && sysexData[2] == defaultMemoryMap[MEM_VERSION_FIRST]
-      && sysexData[3] == defaultMemoryMap[MEM_VERSION_SECOND]) {
-        //serial connected to programmer
+      if(message == MSG_CONNECTED && versionsMatch()) {
+        // Serial.println(">> MSG_CONNECTED");
         setProgrammerConnected();
       }
-      if(sysexData[1] == 70) {
-        //save states
-        setProgrammerMemorySave();
+      if(message == MSG_SETTNGS_SET) {
+        // Serial.println(">> MSG_SETTNGS_SET");
+        saveSettings();
       }
-      if(sysexData[1] == 71) {
-        //save states
-        setProgrammerRestoreMemory();
+      if(message == MSG_SETTNGS_GET) {
+        // Serial.println(">> MSG_SETTNGS_GET");
+        programmerSendSettings();
+      }
+      if(message == MSG_SETTINGS_RESET) {
+        // Serial.println(">> MSG_SETTINGS_RESET");
+        resetSettings();
       }
     }
-    if(sysexData[1] == 72) {
+    if(message == MSG_CONNECT) {
+      // Serial.println(">> MSG_CONNECT");
       sysexProgrammingMode = true;
       sysexProgrammerLastResponse = millis();
       modeProgrammer();
     }
-    if(sysexData[1] == 73) {
+    if(message == MSG_MODE_GET) {
+      // Serial.println(">> MSG_MODE_GET");
       sendMode();
     }
-    if(sysexData[1] == 74) {
+    if(message == MSG_MODE_SET) {
+      // Serial.println(">> MSG_MODE_SET");
       setMode(sysexData[2]);
     }
-    if(sysexData[1] == 75) {
+    if(message == MSG_MIDI_OUT_DELAY_SET) {
+      // Serial.println(">> MSG_MIDI_OUT_DELAY_SET");
       setMidioutDelay(sysexData[2],sysexData[3],sysexData[4],sysexData[5]);
     }
   }
   clearSysexBuffer();
 }
-
-
 
 boolean checkForProgrammerSysex(byte sin)
 {
@@ -201,7 +235,7 @@ boolean checkForProgrammerSysex(byte sin)
         return true;
     } else if (sin == 0xF7 && sysexReceiveMode) {
         sysexReceiveMode = false;
-        getSysexData();
+        handleProgrammerMessage();
         sysexPosition= 0;
         return true;
     } else if (sysexReceiveMode == true) {
@@ -216,10 +250,36 @@ boolean checkForProgrammerSysex(byte sin)
     return false;
 }
 
-
 void blinkSelectedLight(int led)
 {
       if(!blinkSwitch[led]) digitalWrite(pinLeds[led],HIGH);
       blinkSwitch[led]=1;
       blinkSwitchTime[led]=0;
+}
+
+void initProgrammerSysexHandlers() {
+#ifdef HAS_USB_MIDI
+  uMIDI.setHandleSystemExclusive(systemExclusiveHandler);
+#endif
+  sMIDI.setHandleSystemExclusive(systemExclusiveHandler);
+}
+
+/** 
+ * Prepares a SysEx array for the programmer. It expects sysexData to be populated with
+ * the sysex array, without the header and EOF bytes.
+ */
+void systemExclusiveHandler(unsigned char *sysexArray, unsigned int sysexLength) {
+  // handle programmer. Copy payload without SysEx header and EOF
+  memcpy(&sysexData[0], &sysexArray[1], sysexLength - 2);
+  handleProgrammerMessage();
+}
+
+bool versionsMatch() {
+  if (sysexData[2] == defaultMemoryMap[MEM_VERSION_FIRST] && sysexData[3] == defaultMemoryMap[MEM_VERSION_SECOND]) {
+    return true;
+  }
+
+  // Serial.printf(
+  //   "Version mismatch: received %d . %d expected %d . %d\n", sysexData[2], sysexData[3], defaultMemoryMap[MEM_VERSION_FIRST], defaultMemoryMap[MEM_VERSION_SECOND]);
+  return false;
 }
