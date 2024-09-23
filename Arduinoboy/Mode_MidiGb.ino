@@ -11,6 +11,10 @@
  *                                                                         *
  ***************************************************************************/
 
+#define WAV 2
+#define CC_WAV_OFFSET 0x02
+#define MIDI_STATUS_CC 0xB0
+
 void modeMidiGbSetup()
 {
   digitalWrite(pinStatusLed,LOW);
@@ -30,12 +34,11 @@ void modeMidiGb()
   boolean sendByte = false;
   while(1){                                //Loop foreverrrr
     modeMidiGbUsbMidiReceive();
-
     if (serial->available()) {          //If MIDI is sending
       incomingMidiByte = serial->read();    //Get the byte sent from MIDI
 
       if(!checkForProgrammerSysex(incomingMidiByte) && !usbMode) serial->write(incomingMidiByte); //Echo the Byte to MIDI Output
-
+      
       if(incomingMidiByte & 0x80) {
         switch (incomingMidiByte & 0xF0) {
           case 0xF0:
@@ -80,7 +83,12 @@ void modeMidiGb()
         sendByteToGameboy(midiData[1]);
         delayMicroseconds(GB_MIDI_DELAY);
       } else if (midiValueMode) {
-        midiData[2] = incomingMidiByte;
+        if (midiData[0] == (MIDI_STATUS_CC + WAV) && midiData[1] == CC_WAV_OFFSET) {
+          // set all CH3 (WAV) CC02 (WAV offset) to 0
+          midiData[2] = 0x00;
+        } else {
+          midiData[2] = incomingMidiByte;
+        }
         midiAddressMode = true;
         midiValueMode = false;
 
