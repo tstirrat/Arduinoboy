@@ -25,7 +25,7 @@ void initMemory(boolean reinit)
     #endif
     loadMemory();
   } else {
-    for(int m=0;m<=MEM_MAX;m++){
+    for(int m=0;m < MEM_MAX;m++){
       memory[m] = defaultMemoryMap[m];
     }
   }
@@ -45,7 +45,7 @@ void loadMemory()
 
 void printMemory()
 {
-  for(int m=0;m<=MEM_MAX;m++){
+  for(int m=0;m < MEM_MAX;m++){
     serial->println(memory[m],HEX);
   }
 }

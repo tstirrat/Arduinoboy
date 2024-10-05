@@ -51,7 +51,7 @@ void setProgrammerRequestConnect()
 void setProgrammerMemorySave()
 {
   byte offset = 2;
-  for(byte m=4;m<=MEM_MAX;m++) {
+  for(byte m=4;m < MEM_MAX;m++) {
     memory[m] = sysexData[offset];
     offset++;
   }
