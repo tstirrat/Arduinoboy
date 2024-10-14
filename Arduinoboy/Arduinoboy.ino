@@ -105,6 +105,8 @@
 #define MEM_MIDIOUT_BIT_DELAY 61
 #define MEM_MIDIOUT_BYTE_DELAY 63
 
+// #define PRO_MICRO // define this for Pro Micro custom Arduino (not detectable from regular defines)
+
 /***************************************************************************
 * User Settings
 ***************************************************************************/
@@ -112,7 +114,7 @@
 boolean usbMode                  = false; //to use usb for serial communication as oppose to MIDI - sets baud rate to 38400
 
 byte defaultMemoryMap[MEM_MAX] = {
-  0x7F,0x01,0x03,0x7F, //memory init check
+  0x7F,0x01,0x04,0x7F, //memory init check
   0x00, //force mode (forces lsdj to be sl)
   0x00, //mode
 
@@ -140,6 +142,8 @@ byte defaultMemoryMap[MEM_MAX] = {
 };
 byte memory[MEM_MAX];
 
+#include <MIDI.h>
+
 /***************************************************************************
 * Lets Assign our Arduino Pins .....
 ***************************************************************************/
@@ -153,9 +157,9 @@ byte memory[MEM_MAX];
 * Be sure to compile
 ***************************************************************************/
 #if defined (__MK20DX256__) || defined (__MK20DX128__) || defined (__MKL26Z64__)
-#define USE_TEENSY 1
-#define USE_USB 1
-#include <MIDI.h>
+#define USE_TEENSY
+#define HAS_USB_MIDI
+#include <USB-MIDI.h>
 
 #if defined (__MKL26Z64__)
 #define GB_SET(bit_cl,bit_out,bit_in) GPIOB_PDOR = ((bit_in<<3) | (bit_out<<1) | bit_cl)
@@ -174,11 +178,34 @@ int pinButtonMode = 2; //toggle button for selecting the mode
 HardwareSerial *serial = &Serial1;
 
 /***************************************************************************
+* Pro Micro (ATmega32U4, with different pin config)
+***************************************************************************/
+#elif defined (PRO_MICRO)
+#define HAS_USB_MIDI
+#include <USB-MIDI.h>
+
+#define GB_SET(bit_cl, bit_out, bit_in) PORTF = (PINF & B00011111) | ((bit_cl<<7) | ((bit_out)<<6) | ((bit_in)<<5))
+// ^ The reason for not using digitalWrite is to allign clock and data pins for the GB shift reg.
+// Pin distribution comes from official Arduino Leonardo documentation
+
+int pinGBClock     = A0;    // Analog In 0 - clock out to gameboy
+int pinGBSerialOut = A1;    // Analog In 1 - serial data to gameboy 
+int pinGBSerialIn  = A2;    // Analog In 2 - serial data from gameboy
+int pinMidiInputPower = 4; // power pin for midi input opto-isolator
+int pinStatusLed = 10; // Status LED
+int pinLeds[] = {9,8,7,6,5,10}; // LED Pins
+int pinButtonMode = 3; //toggle button for selecting the mode
+
+HardwareSerial *serial = &Serial1;
+
+
+
+/***************************************************************************
 * Arduino Leonardo/Yún/Micro (ATmega32U4)
 ***************************************************************************/
 #elif defined (__AVR_ATmega32U4__)
-#define USE_LEONARDO
-#include <MIDIUSB.h>
+#define HAS_USB_MIDI
+#include <USB-MIDI.h>
 
 #define GB_SET(bit_cl, bit_out, bit_in) PORTF = (PINF & B00011111) | ((bit_cl<<7) | ((bit_out)<<6) | ((bit_in)<<5))
 // ^ The reason for not using digitalWrite is to allign clock and data pins for the GB shift reg.
@@ -200,9 +227,8 @@ HardwareSerial *serial = &Serial1;
 ***************************************************************************/
 #elif defined (__SAM3X8E__)
 #define USE_DUE
-
-#define USE_LEONARDO
-#include <MIDIUSB.h>
+#define HAS_USB_MIDI
+#include <USB-MIDI.h>
 #include <digitalWriteFast.h>
 
 
@@ -267,12 +293,12 @@ boolean sysexProgrammingMode = 0;
 boolean sysexProgrammingWaiting = 0;
 boolean sysexProgrammingConnected = 0;
 
-unsigned long sysexProgrammerWaitTime = 2000; //2 seconds
-unsigned long sysexProgrammerCallTime = 1000; //1 second
+const unsigned long PROGRAMMER_MAX_WAIT_TIME = 2000; //2 seconds
+const unsigned long PROGRAMMER_MAX_CALL_TIME = 1000; //1 second
 unsigned long sysexProgrammerLastResponse = 0;
 unsigned long sysexProgrammerLastSent = 0;
 
-byte sysexManufacturerId = 0x69; //har har harrrrr :)
+const byte SYSEX_MFG_ID = 0x69; //har har harrrrr :)
 int sysexPosition;
 byte sysexData[128];
 byte longestSysexMessage = 128;
@@ -421,6 +447,24 @@ uint8_t mapQueueWaitUsb = 5; //5ms - Needs to be longer because message packet i
 ***************************************************************************/
 #define GB_MIDI_DELAY 500 //Microseconds to delay the sending of a byte to gb
 
+/***************************************************************************
+* MIDI Setup (Serial and USB)
+***************************************************************************/
+USING_NAMESPACE_MIDI;
+
+#ifdef HAS_USB_MIDI
+typedef USBMIDI_NAMESPACE::usbMidiTransport __umt;
+typedef MIDI_NAMESPACE::MidiInterface<__umt> __ss;
+__umt usbMIDI_t(0 /** cable no */);
+__ss uMIDI((__umt&)usbMIDI_t);
+#endif
+
+#if defined(ARDUINO_SAM_DUE) || defined(USBCON) || defined(__MK20DX128__) || defined(__MK20DX256__) || defined(__MKL26Z64__)
+  MIDI_CREATE_INSTANCE(HardwareSerial, Serial1, sMIDI);
+#else
+  MIDI_CREATE_INSTANCE(HardwareSerial, Serial, sMIDI);
+#endif
+
 void setup() {
 /*
   Init Memory
@@ -437,26 +481,23 @@ void setup() {
   pinMode(pinGBSerialIn,INPUT);
   pinMode(pinGBSerialOut,OUTPUT);
 
-/*
-  Set MIDI Serial Rate
-*/
-
-#ifdef USE_USB
-  serial->begin(31250); //31250
-#else
-  if(usbMode == true) {
+  /*
+    Set MIDI Serial Rate
+  */
+  if(usbMode) {
     serial->begin(38400);
   } else {
     pinMode(pinMidiInputPower,OUTPUT);
     digitalWrite(pinMidiInputPower,HIGH); // turn on the optoisolator
-    #ifdef USE_LEONARDO
-      Serial1.begin(31250); //31250
-    #else
-      Serial.begin(31250); //31250
+    sMIDI.begin(MIDI_CHANNEL_OMNI);
+
+    // Enable serial MIDI in to serial MIDI out "thru mode"
+    sMIDI.turnThruOn(Thru::Full);
+
+    #ifdef HAS_USB_MIDI
+    uMIDI.begin(MIDI_CHANNEL_OMNI);
     #endif
   }
-#endif
-
 /*
   Set Pin States
 */
@@ -489,10 +530,7 @@ void setup() {
   #endif
   lastMode = memory[MEM_MODE];
 
-/*
-  usbMidi sysex support
-*/
-  usbMidiInit();
+  initProgrammerSysexHandlers();
 
   startupSequence();
 
