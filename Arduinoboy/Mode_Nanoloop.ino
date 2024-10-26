@@ -135,7 +135,7 @@ void modeNanoloopUsbMidiReceive()
     }
 #endif
 
-#ifdef USE_LEONARDO
+#ifdef HAS_USB_MIDI
   midiEventPacket_t rx;
   do
   {
