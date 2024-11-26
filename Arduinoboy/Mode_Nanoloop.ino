@@ -36,7 +36,7 @@ void modeNanoloopSync()
 
     if(incomingMidiByte & 0x80) {
     switch (incomingMidiByte) {
-      case 0xF8:                                 // Clock Message Recieved
+      case midi::Clock:                                 // Clock Message Recieved
                                                  // Send a clock tick out if the sequencer is running
         if(sequencerStarted) {
           nanoSkipSync = !nanoSkipSync;
@@ -50,11 +50,11 @@ void modeNanoloopSync()
           break;
         }
         break;
-      case 0xFA:                                 // Transport Start Message
-      case 0xFB:                                 // Transport Continue Message
+      case midi::Start:                                 // Transport Start Message
+      case midi::Continue:                                 // Transport Continue Message
         sequencerStart();
         break;
-      case 0xFC:                                 // Transport Stop Message
+      case midi::Stop:                                 // Transport Stop Message
         sequencerStop();
         break;
       default:
@@ -88,7 +88,7 @@ boolean sendTickToNanoloop(boolean state, boolean last_state)
 void usbMidiNanoloopRealtimeMessage(uint8_t message)
 {
     switch(message) {
-      case 0xF8:
+      case midi::Clock:
           if(sequencerStarted) {
             nanoSkipSync = !nanoSkipSync;
             if(countSyncTime) {
@@ -100,11 +100,11 @@ void usbMidiNanoloopRealtimeMessage(uint8_t message)
             updateVisualSync();
           }
       break;
-      case 0xFA:                                // Case: Transport Start Message
-      case 0xFB:                                // and Case: Transport Continue Message
+      case midi::Start:                                // Case: Transport Start Message
+      case midi::Continue:                                // and Case: Transport Continue Message
           sequencerStart();                       // Start the sequencer
       break;
-      case 0xFC:                                // Case: Transport Stop Message
+      case midi::Stop:                                // Case: Transport Stop Message
           sequencerStop();
       break;
     }
@@ -135,7 +135,7 @@ void modeNanoloopUsbMidiReceive()
     }
 #endif
 
-#ifdef USE_LEONARDO
+#ifdef HAS_USB_MIDI
   midiEventPacket_t rx;
   do
   {

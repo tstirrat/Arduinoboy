@@ -16,9 +16,6 @@ void modeLSDJKeyboardSetup()
   digitalWrite(pinStatusLed,LOW);
   pinMode(pinGBClock,OUTPUT);
   digitalWrite(pinGBClock,HIGH);
- #ifdef USE_TEENSY
-  usbMIDI.setHandleRealTimeSystem(NULL);
- #endif
   blinkMaxCount=1000;
 
   /* The stuff below makes sure the code is in the same state as LSDJ on reset / restart, mode switched, etc. */
@@ -38,75 +35,50 @@ void modeLSDJKeyboardSetup()
 
 void modeLSDJKeyboard()
 {
-  while(1){                              //Loop foreverrrr
-  modeLSDJKeyboardMidiReceive();
-  if (serial->available()) {          //If MIDI is sending
-    incomingMidiByte = serial->read();    //Get the byte sent from MIDI
-    if(!checkForProgrammerSysex(incomingMidiByte) && !usbMode) serial->write(incomingMidiByte);//Echo the Byte to MIDI Output
+  while (1) {
+    modeLSDJKeyboardUsbMidiReceive();
+    modeLSDJKeyboardSerialMidiReceive();
 
-
-    /***************************************************************************
-     * Midi to LSDJ Keyboard Handling                                          *
-     ***************************************************************************/
-    //If the byte is a Status Message
-    if(incomingMidiByte & 0x80) {
-      /* Status message Information (# = midi channel 0 to F [1-16] )
-          0x8# = Note Off
-          0x9# = Note On
-          0xA# = AfterTouch (ie, key pressure)
-          0xB# = Control Change
-          0xC# = Program (patch) change
-          0xD# = Channel Pressure
-          0xE# = Pitch Wheel
-          0xF0 - 0xF7 = System Common Messages
-          0xF8 - 0xFF = System Realtime Messages
-      */
-
-      //Weee hello world bitwise and. ... make the second hex digit zero so we can have a simple case statement
-      // - the second digit is usually the midi channel 0 to F (1-16) unless its a 0xF0 message...
-      switch (incomingMidiByte & 0xF0) {
-        case 0x90:
-          //Note-On Status Message (Note: we have to treat this carefully because note status isnt sent on every note-on, damn it)
-          //There are 3 bytes total we need: Channel, Note, and velocity, these wil be assigned to a array until we have the velocity,
-          //at that point we can then call our note out function to LSDJ
-          midiNoteOnMode = true;                    //Set our stupid "Note on mode" on
-          midiData[0] = incomingMidiByte;   //Assign the byte to the first position of a data array. (this is the midi channel)
-          midiData[1] = false;              //Force the second position to false (this will hold the note number)
-          break;
-        case 0xC0:
-          //Program change message
-          midiProgramChange = true;                   //Set our silly "Program Change mode" ... we need to get the next byte later
-          midiNoteOnMode = false;                     //Turn Note-on mode off
-          midiData[0] = incomingMidiByte - 48;//Set the number to a "note on" message so we can use the same "channel" variable as note on messages
-          break;
-        case 0xF0:
-           //Do nothing, these dont interfear with our note-on mode
-          break;
-        default:
-          //Turn Note-On mode off
-          midiNoteOnMode = false;
-          break;
-      }
-    } else if(midiNoteOnMode) {
-      //It wasnt a status bit, so lets assume it was a note message if the last status message was note-on.
-      if(!midiData[1]) {
-         //If we dont have a note number, we assume this byte is the note number, get it...
-         midiData[1] = incomingMidiByte;
-      } else {
-         //We have our note and channel, so call our note function...
-
-         playLSDJNote(midiData[0], midiData[1], incomingMidiByte);
-         midiData[1] = false; //Set the note to false, forcing to capture the next note
-      }
-    } else if (midiProgramChange) {
-        changeLSDJInstrument(midiData[0], incomingMidiByte);
-        midiProgramChange = false;
-        midiData[0] = false;
-    }
+    updateStatusLed();        // Update our status blinker
+    setMode();                // Check if mode button was depressed
   }
+}
 
-  updateStatusLed();        // Update our status blinker
-  setMode();                // Check if mode button was depressed
+void modeLSDJKeyboardUsbMidiReceive()
+{
+#ifdef HAS_USB_MIDI
+  while(uMIDI.read(memory[MEM_KEYBD_CH]+1)) {
+
+    byte type = uMIDI.getType();
+    byte data1 = uMIDI.getData1();
+    byte data2 = uMIDI.getData2();
+
+    handleLSDJKeyboardMessage(type, data1, data2);
+  }
+#endif
+}
+
+void modeLSDJKeyboardSerialMidiReceive() {
+  if (!sMIDI.read(memory[MEM_KEYBD_CH]+1)) return;
+
+  byte type = sMIDI.getType();
+  byte data1 = sMIDI.getData1();
+  byte data2 = sMIDI.getData2();
+
+  handleLSDJKeyboardMessage(type, data1, data2);
+}
+
+void handleLSDJKeyboardMessage(byte type, byte data1, byte data2) {
+  switch(type) {
+    case midi::NoteOff:
+      playLSDJNote(data1, 0);
+    break;
+    case midi::NoteOn:
+      playLSDJNote(data1, data2);
+    break;
+    case midi::ProgramChange:
+      changeLSDJInstrument(midi::ProgramChange + memory[MEM_KEYBD_CH], data1);
+    break;
   }
 }
 
@@ -118,10 +90,10 @@ void changeLSDJInstrument(byte channel,byte message)
 {
   keyboardCurrentIns = message; //set the current instrument number
 
-  if(channel == (0x90+memory[MEM_KEYBD_CH]) && keyboardCurrentIns != keyboardLastIns) {
+  if(channel == (midi::ProgramChange+memory[MEM_KEYBD_CH]) && keyboardCurrentIns != keyboardLastIns) {
   //if its on our midi channel and the instrument isnt the same as our currrent
     if(!memory[MEM_KEYBD_COMPAT_MODE]) {
-      sendKeyboardByteToGameboy(0x80 | message); // <- this is suppose to work but doesn't :/
+      sendKeyboardByteToGameboy(midi::NoteOff | message); // <- this is suppose to work but doesn't :/
     } else {
       //We will find out which is greater, the current instrument or the last instrument. then
       //cycle up or down to that instrument
@@ -145,10 +117,9 @@ void changeLSDJInstrument(byte channel,byte message)
  /*
   w00t...
  */
-void playLSDJNote(byte channel,byte note, byte velocity)
+void playLSDJNote(byte note, byte velocity)
 {
-  if(channel == (0x90+memory[MEM_KEYBD_CH])
-     && velocity > 0x00) { //If midi channel = ours and the velocity is greater then 0
+  if(velocity > 0x00) { //If midi channel = ours and the velocity is greater then 0
     if(note >= keyboardNoteStart) {
       keyboardNoteOffset = 0;
       note = note - keyboardNoteStart;  //subtract the octave offset to get a value ranging from 0 to 48 for comparison
@@ -233,54 +204,4 @@ void sendKeyboardByteToGameboy(byte send_byte)
   delayMicroseconds(50);
   GB_SET(1,1,0);
   delayMicroseconds(4000);
-}
-
-void modeLSDJKeyboardMidiReceive()
-{
-#ifdef USE_TEENSY
-
-    while(usbMIDI.read(memory[MEM_KEYBD_CH]+1)) {
-        switch(usbMIDI.getType()) {
-            case 0x80: // note off
-                playLSDJNote(0x90+memory[MEM_KEYBD_CH], usbMIDI.getData1(), 0);
-            break;
-            case 0x90: // note on
-                playLSDJNote(0x90+memory[MEM_KEYBD_CH], usbMIDI.getData1(), usbMIDI.getData2());
-            break;
-            case 0xC0: // PG
-                changeLSDJInstrument(0xC0+memory[MEM_KEYBD_CH], usbMIDI.getData1());
-            break;
-            /*
-            case 3: // CC
-            break;
-            case 5: // AT
-            break;
-            case 6: // PB
-            break;
-            */
-        }
-    }
-#endif
-#ifdef USE_LEONARDO
-
-    midiEventPacket_t rx;
-    do {
-      rx = MidiUSB.read();
-      switch (rx.header)
-        {
-        case 0x08: // note off
-          playLSDJNote(0x90+memory[MEM_KEYBD_CH], rx.byte2, 0);
-          statusLedOn();
-          break;
-        case 0x09: // note on
-          playLSDJNote(0x90+memory[MEM_KEYBD_CH], rx.byte2, rx.byte3);
-          statusLedOn();
-          break;
-        case 0x0C: // PG
-          changeLSDJInstrument(0xC0+memory[MEM_KEYBD_CH], rx.byte2);
-          statusLedOn();
-          break;
-      }
-    } while (rx.header != 0);
-#endif
 }
